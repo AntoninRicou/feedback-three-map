@@ -1,6 +1,9 @@
 const sources = {
     form: '/data/umap_subjects.json',
-    // mapType: '/path/to/data.json'
+    projection_2d: '/data/projection_2d.json',
+    umap_book: '/data/umap_book2.json',
+    umap_subjects_embeddings: '/data/umap_subjects_embeddings2.json',
+    umap_random: '/data/umap_random2.json',
 };
 
 async function loadMapData(mapType) {
@@ -12,7 +15,8 @@ async function loadMapData(mapType) {
     if (!res.ok) {
         throw new Error(`Failed to load ${src}: ${res.status}`);
     }
-    return res.json();
+    const raw = await res.json();
+    return Array.isArray(raw) ? { points: raw } : raw;
 }
 
 export { sources, loadMapData };
