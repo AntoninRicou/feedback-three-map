@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { loadMapData } from './mapData.js';
 import { createPointsManager } from './components/pointsManager.js';
 
+const SPREAD = 5;
+const dataCache = new Map();
+
 function app({ container, id, mapType, state, appIsReady }) {
     console.log("App initialized");
     let canvas, scene, camera, renderer, data, points;
@@ -17,7 +20,7 @@ function app({ container, id, mapType, state, appIsReady }) {
         canvas.style.width = '100%';
         canvas.style.height = '100%';
         container.appendChild(canvas);
-        window.addEventListener('resize', onResize);
+        window.addEventListener('resize', resize);
 
         createScene();
 
@@ -50,18 +53,31 @@ function app({ container, id, mapType, state, appIsReady }) {
         renderer.outputColorSpace = THREE.SRGBColorSpace;
     }
 
-    function onResize() {
+    function resize() {
         const { clientWidth: width, clientHeight: height } = container;
+        if (!width || !height || !camera || !renderer) return;
         camera.aspect = width / height;
         camera.updateProjectionMatrix();
         renderer.setSize(width, height, false);
     }
 
+    function setCameraZ(z) {
+        if (!camera) return;
+        camera.position.z = z;
+    }
+
+    function setDriftTarget(x, y) {
+        targetX = x;
+        targetY = y;
+    }
+
     function update() { }
 
-    function animate() {
+    function animate(dt = 0) {
+        if (!container.clientWidth || !container.clientHeight) return;
         camera.position.x += (targetX - camera.position.x) * LERP;
         camera.position.y += (targetY - camera.position.y) * LERP;
+        if (points) points.tick(dt);
         renderer.render(scene, camera);
     }
 
@@ -78,9 +94,42 @@ function app({ container, id, mapType, state, appIsReady }) {
         return points ? points.ids : [];
     }
 
+    async function morphTo(targetMapType, duration = 1) {
+        if (!points) return;
+        let other = dataCache.get(targetMapType);
+        if (!other) {
+            other = await loadMapData(targetMapType);
+            dataCache.set(targetMapType, other);
+        }
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const p of other.points) {
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+        }
+        const rangeX = maxX - minX || 1;
+        const rangeY = maxY - minY || 1;
+        const byId = new Map();
+        for (const p of other.points) {
+            const nx = (p.x - minX) / rangeX;
+            const ny = (p.y - minY) / rangeY;
+            byId.set(p.id, { x: (nx - 0.5) * SPREAD, y: (ny - 0.5) * SPREAD });
+        }
+        points.morphTo(byId, duration);
+    }
+
+    function enterDisperse(opts) {
+        if (points) points.enterDisperse(opts);
+    }
+
+    function exitDisperse() {
+        if (points) points.exitDisperse();
+    }
+
     setup();
 
-    return { animate, focusOn, getIds }
+    return { animate, focusOn, getIds, resize, setCameraZ, setDriftTarget, morphTo, enterDisperse, exitDisperse }
 }
 
 export default app;

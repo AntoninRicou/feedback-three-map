@@ -1,4 +1,4 @@
-export function createCommands(apps) {
+export function createCommands(apps, stateManager) {
   function focusOnId(pointId) {
     if (!pointId) return;
     console.log('Focusing on', pointId);
@@ -20,5 +20,10 @@ export function createCommands(apps) {
     return common[Math.floor(Math.random() * common.length)];
   }
 
-  return { focusOnId, pickRandomCommonId };
+  function setState(payload) {
+    if (!payload?.name) return;
+    stateManager.goTo(payload.name, { duration: payload.duration });
+  }
+
+  return { focusOnId, pickRandomCommonId, setState };
 }

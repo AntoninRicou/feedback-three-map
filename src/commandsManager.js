@@ -8,6 +8,10 @@ export function createCommandsManager(actions) {
       const id = actions.pickRandomCommonId();
       if (id) actions.focusOnId(id);
     },
+
+    'set-state'(payload) {
+      actions.setState(payload);
+    },
   };
 
   return {

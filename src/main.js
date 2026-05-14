@@ -3,14 +3,17 @@ import app from './app.js';
 import { connect, on, send } from './api.js';
 import { createCommands } from './commands.js';
 import { createCommandsManager } from './commandsManager.js';
+import { createStateManager } from './stateManager.js';
 import './style.css';
 function main() {
   console.log("Hello, World!");
   const apps = [];
-
+  const containers = [1, 2, 3, 4].map(n => document.getElementById(`container-${n}`));
+  const stateManager = createStateManager({ containers, getApps: () => apps });
 
   function setup() {
     console.log("Setting up the application...");
+    stateManager.init();
     createApp(1, 'projection_2d');
     createApp(2, 'umap_book');
     createApp(3, 'umap_subjects_embeddings');
@@ -22,13 +25,14 @@ function main() {
 
   function setupSocketBridge() {
     connect();
-    const actions = createCommands(apps);
+    const actions = createCommands(apps, stateManager);
     const manager = createCommandsManager(actions);
     manager.register(on);
     window.api = {
       send,
       run: manager.run,
       list: manager.list,
+      state: stateManager,
     };
   }
 
@@ -36,7 +40,7 @@ function main() {
     const container = document.getElementById(`container-${number}`);
     const id = `canvas-${number}`;
     const newApp = app({ container, id, mapType, state: {}, appIsReady: () => appIsReady(id) });
-    apps.push({ object: newApp, id, isReady: false });
+    apps.push({ object: newApp, id, isReady: false, mapType });
   }
 
   function appIsReady(id) {
@@ -48,10 +52,17 @@ function main() {
     }
   }
 
+  let lastTime = performance.now();
   function animate() {
+    const now = performance.now();
+    const dt = Math.min(0.1, (now - lastTime) / 1000);
+    lastTime = now;
+
+    stateManager.tick(dt);
+
     apps.forEach(app => {
       if (app.isReady) {
-        app.object.animate();
+        app.object.animate(dt);
       }
     });
 

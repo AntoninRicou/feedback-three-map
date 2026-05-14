@@ -100,6 +100,15 @@ function createPointsManager({ scene, data, atlas, atlasTexture, spread = 5, thu
     const HIGHLIGHT_SCALE = 1.6;
     let highlighted = -1;
 
+    const morphStart = positions.map(p => ({ x: p.x, y: p.y }));
+    const morphTarget = positions.map(p => ({ x: p.x, y: p.y }));
+    let morphT = 0;
+    let morphDuration = 0;
+    let morphing = false;
+
+    const easeInOutCubic = t =>
+        t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
     function setInstance(i, scaleMul, z) {
         const pos = positions[i];
         if (!pos) return;
@@ -123,7 +132,171 @@ function createPointsManager({ scene, data, atlas, atlasTexture, spread = 5, thu
         return i == null ? null : positions[i];
     }
 
-    return { mesh, geometry, material, ids, highlight, getPosition };
+    function morphTo(positionsById, duration = 1) {
+        for (let i = 0; i < count; i++) {
+            morphStart[i].x = positions[i].x;
+            morphStart[i].y = positions[i].y;
+            const tp = positionsById.get(ids[i]);
+            if (tp) {
+                morphTarget[i].x = tp.x;
+                morphTarget[i].y = tp.y;
+            } else {
+                morphTarget[i].x = positions[i].x;
+                morphTarget[i].y = positions[i].y;
+            }
+        }
+        morphT = 0;
+        morphDuration = Math.max(0.001, duration);
+        morphing = true;
+    }
+
+    const disperse = {
+        active: false,
+        phase: 'idle',
+        burstElapsed: 0,
+        driftElapsed: 0,
+        cycleSpeed: 15,
+        wanderDistance: 0.8,
+        restore: new Map(),
+        anchor: new Map(),
+        per: [],
+    };
+
+    const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
+
+    function writeInstance(i) {
+        const scaleMul = i === highlighted ? HIGHLIGHT_SCALE : 1;
+        const z = i === highlighted ? 0.01 : 0;
+        setInstance(i, scaleMul, z);
+    }
+
+    function enterDisperse({ rMax = 2.0, cycleSpeed = 15, wanderDistance = 0.8 } = {}) {
+        morphing = false;
+        disperse.active = true;
+        disperse.phase = 'burst';
+        disperse.burstElapsed = 0;
+        disperse.driftElapsed = 0;
+        disperse.cycleSpeed = cycleSpeed;
+        disperse.wanderDistance = wanderDistance;
+        disperse.restore = new Map();
+        disperse.anchor = new Map();
+        disperse.per = new Array(count);
+
+        for (let i = 0; i < count; i++) {
+            const id = ids[i];
+            disperse.restore.set(`restore:${id}`, { x: positions[i].x, y: positions[i].y });
+
+            const angle = Math.random() * Math.PI * 2;
+            const r = rMax * Math.sqrt(Math.random());
+            const spawnX = Math.cos(angle) * r;
+            const spawnY = Math.sin(angle) * r;
+
+            const fx1 = 0.5 + Math.random() * 1.5;
+            const fx2 = 0.5 + Math.random() * 1.5;
+            const px1 = Math.random() * Math.PI * 2;
+            const px2 = Math.random() * Math.PI * 2;
+            const fy1 = 0.5 + Math.random() * 1.5;
+            const fy2 = 0.5 + Math.random() * 1.5;
+            const py1 = Math.random() * Math.PI * 2;
+            const py2 = Math.random() * Math.PI * 2;
+
+            const baseX = Math.sin(px1) + Math.sin(px2);
+            const baseY = Math.sin(py1) + Math.sin(py2);
+
+            const delay = Math.random() * 0.14;
+            const duration = 0.42 + Math.random() * 0.22;
+
+            disperse.per[i] = {
+                spawnX, spawnY, delay, duration,
+                fx1, fx2, px1, px2, fy1, fy2, py1, py2,
+                baseX, baseY,
+            };
+
+            positions[i].x = 0;
+            positions[i].y = 0;
+            writeInstance(i);
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+    }
+
+    function exitDisperse() {
+        if (!disperse.active) return;
+        disperse.active = false;
+        disperse.phase = 'idle';
+        for (let i = 0; i < count; i++) {
+            const r = disperse.restore.get(`restore:${ids[i]}`);
+            if (!r) continue;
+            positions[i].x = r.x;
+            positions[i].y = r.y;
+            writeInstance(i);
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+        disperse.restore.clear();
+        disperse.anchor.clear();
+        disperse.per = [];
+    }
+
+    function tickDisperse(dt) {
+        if (disperse.phase === 'burst') {
+            disperse.burstElapsed += dt;
+            let allDone = true;
+            for (let i = 0; i < count; i++) {
+                const p = disperse.per[i];
+                const raw = (disperse.burstElapsed - p.delay) / p.duration;
+                const progress = Math.max(0, Math.min(1, raw));
+                if (progress < 1) allDone = false;
+                const e = easeOutCubic(progress);
+                positions[i].x = p.spawnX * e;
+                positions[i].y = p.spawnY * e;
+                writeInstance(i);
+            }
+            mesh.instanceMatrix.needsUpdate = true;
+            if (allDone) {
+                for (let i = 0; i < count; i++) {
+                    disperse.anchor.set(ids[i], { x: positions[i].x, y: positions[i].y });
+                }
+                disperse.phase = 'drift';
+                disperse.driftElapsed = 0;
+            }
+            return;
+        }
+        if (disperse.phase === 'drift') {
+            disperse.driftElapsed += dt;
+            const t = disperse.driftElapsed / disperse.cycleSpeed;
+            const wd = disperse.wanderDistance;
+            for (let i = 0; i < count; i++) {
+                const p = disperse.per[i];
+                const a = disperse.anchor.get(ids[i]);
+                if (!a) continue;
+                const dx = (Math.sin(p.fx1 * t + p.px1) + Math.sin(p.fx2 * t + p.px2) - p.baseX) * wd;
+                const dy = (Math.sin(p.fy1 * t + p.py1) + Math.sin(p.fy2 * t + p.py2) - p.baseY) * wd;
+                positions[i].x = a.x + dx;
+                positions[i].y = a.y + dy;
+                writeInstance(i);
+            }
+            mesh.instanceMatrix.needsUpdate = true;
+        }
+    }
+
+    function tick(dt) {
+        if (disperse.active) {
+            tickDisperse(dt);
+            return;
+        }
+        if (!morphing) return;
+        morphT += dt;
+        const t = Math.min(1, morphT / morphDuration);
+        const e = easeInOutCubic(t);
+        for (let i = 0; i < count; i++) {
+            positions[i].x = morphStart[i].x + (morphTarget[i].x - morphStart[i].x) * e;
+            positions[i].y = morphStart[i].y + (morphTarget[i].y - morphStart[i].y) * e;
+            writeInstance(i);
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+        if (t >= 1) morphing = false;
+    }
+
+    return { mesh, geometry, material, ids, highlight, getPosition, morphTo, tick, enterDisperse, exitDisperse };
 }
 
 export { createPointsManager };
